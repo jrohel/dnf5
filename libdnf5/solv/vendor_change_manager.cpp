@@ -212,6 +212,38 @@ VendorChangeManager::VendorChangePolicy::PackageDef::FilterFunction resolve_pack
 }
 
 
+std::string_view package_filter_func_to_name(VendorChangeManager::VendorChangePolicy::PackageDef::FilterFunction func) {
+    if (func == filter_package_name) {
+        return "name";
+    }
+    if (func == filter_package_source_name) {
+        return "source_name";
+    }
+    if (func == filter_package_evr) {
+        return "evr";
+    }
+    if (func == filter_package_epoch) {
+        return "epoch";
+    }
+    if (func == filter_package_version) {
+        return "version";
+    }
+    if (func == filter_package_release) {
+        return "release";
+    }
+    if (func == filter_package_arch) {
+        return "arch";
+    }
+    if (func == filter_package_repoid) {
+        return "repoid";
+    }
+    if (func == filter_package_cmdline_repo) {
+        return "cmdline_repo";
+    }
+    libdnf_throw_assertion("Unknown package filter function");
+}
+
+
 class VendorChangePolicyTomlFormatError : public base::VendorChangeManagerError {
 public:
     using VendorChangeManagerError::VendorChangeManagerError;
@@ -225,6 +257,8 @@ public:
     explicit VendorChangePolicyTomlFormat(std::filesystem::path path) : path{std::move(path)} {}
 
     VendorChangeManager::VendorChangePolicy parse() const;
+
+    static std::string to_string(const VendorChangeManager::VendorChangePolicy & entries);
 
 private:
     using VendorGroupType = VendorChangeManager::VendorChangePolicy::VendorGroupType;
@@ -532,6 +566,74 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
 }
 
 
+std::string VendorChangePolicyTomlFormat::to_string(const VendorChangeManager::VendorChangePolicy & policy) {
+    std::string result = "version = '1.2'\n";
+
+    // Vendor entries
+    for (const auto & vendor_entry : policy.vendor_entries) {
+        const char * section;
+        switch (vendor_entry.group_type) {
+            case VendorGroupType::OUTGOING:
+                section = "outgoing_vendors";
+                break;
+            case VendorGroupType::INCOMING:
+                section = "incoming_vendors";
+                break;
+            case VendorGroupType::EQUIVALENT:
+                section = "equivalent_vendors";
+                break;
+            default:
+                libdnf_throw_assertion("Invalid vendor change policy direction");
+        }
+        result += "\n[[";
+        result += section;
+        result += "]]\nvendor = '";
+        result += toml::format(toml::value(vendor_entry.def.vendor));
+        result += "'\n";
+
+        if (vendor_entry.def.comparator != sack::QueryCmp::EXACT) {
+            result += "comparator = '";
+            result += comparator_to_string(vendor_entry.def.comparator);
+            result += "'\n";
+        }
+        if (vendor_entry.def.is_exclusion) {
+            result += "exclude = true\n";
+        }
+    }
+
+    // Package filter entries
+    for (const auto & [pkg_entries, section] :
+         {std::pair{policy.incoming_packages, "incoming_packages"},
+          std::pair{policy.outgoing_packages, "outgoing_packages"}}) {
+        for (const auto & pkg_entry : pkg_entries) {
+            result += "\n[[";
+            result += section;
+            result += "]]\n";
+            if (pkg_entry.is_exclusion) {
+                result += "exclude = true\n";
+            }
+            result += "filters = [\n";
+            for (const auto & filter : pkg_entry.filters) {
+                result += "  { filter = '";
+                result += package_filter_func_to_name(filter.filter_func);
+                result += "', value = '";
+                result += toml::format(toml::value(filter.value));
+                result += "'";
+                if (filter.comparator != sack::QueryCmp::EXACT) {
+                    result += ", comparator = '";
+                    result += comparator_to_string(filter.comparator);
+                    result += "'";
+                }
+                result += " },\n";
+            }
+            result += "]\n";
+        }
+    }
+
+    return result;
+}
+
+
 sack::QueryCmp VendorChangePolicyTomlFormat::string_to_comparator(
     const std::string & str_comparator, const std::string & cfg_version, std::size_t line_num) const {
     if (const auto it = COMPARATORS.find(str_comparator); it != COMPARATORS.end()) {
@@ -564,7 +666,7 @@ std::string VendorChangePolicyTomlFormat::comparator_to_string(sack::QueryCmp co
             return std::string{text};
         }
     }
-    libdnf_throw_assertion("Invalid value of comparator");
+    libdnf_throw_assertion("Invalid comparator");
 }
 
 
@@ -718,6 +820,8 @@ public:
 
     VendorChangeManager::VendorChangePolicy parse();
 
+    static std::string to_string(const VendorChangeManager::VendorChangePolicy & policy);
+
 private:
     using VendorGroupType = VendorChangeManager::VendorChangePolicy::VendorGroupType;
     using FilterFunction = VendorChangeManager::VendorChangePolicy::PackageDef::FilterFunction;
@@ -775,9 +879,13 @@ private:
 
     std::string parse_quoted_string();
 
+    static std::string to_quoted_string(const std::string & value);
+
     VendorGroupType parse_direction();
 
     sack::QueryCmp parse_comparator();
+
+    static std::string comparator_to_string(sack::QueryCmp cmp);
 
     void parse_vendor_entry(VendorChangeManager::VendorChangePolicy & policy);
 
@@ -841,6 +949,73 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyCompactFormat::parse()
 }
 
 
+std::string VendorChangePolicyCompactFormat::to_string(const VendorChangeManager::VendorChangePolicy & policy) {
+    std::string result;
+
+    // Vendor entries
+    bool first = true;
+    for (const auto & entry : policy.vendor_entries) {
+        if (!first) {
+            result += ',';
+        }
+        first = false;
+        switch (entry.group_type) {
+            case VendorChangeManager::VendorChangePolicy::VendorGroupType::OUTGOING:
+                result += "out:";
+                break;
+            case VendorChangeManager::VendorChangePolicy::VendorGroupType::INCOMING:
+                result += "in:";
+                break;
+            case VendorChangeManager::VendorChangePolicy::VendorGroupType::EQUIVALENT:
+                result += "eq:";
+                break;
+            default:
+                libdnf_throw_assertion("Invalid vendor change policy direction");
+        }
+        if (entry.def.is_exclusion) {
+            result += 'e';
+        }
+        if (entry.def.comparator != sack::QueryCmp::EXACT) {
+            result += comparator_to_string(entry.def.comparator);
+        }
+        result += to_quoted_string(entry.def.vendor);
+    }
+
+    // Package filter entries
+    if (!policy.outgoing_packages.empty() || !policy.incoming_packages.empty()) {
+        result += '@';
+        first = true;
+        for (const auto & [pkg_entries, prefix] :
+             {std::pair{policy.incoming_packages, "in:"}, std::pair{policy.outgoing_packages, "out:"}}) {
+            for (const auto & pkg_entry : pkg_entries) {
+                if (!first) {
+                    result += ',';
+                }
+                first = false;
+                result += prefix;
+                if (pkg_entry.is_exclusion) {
+                    result += 'e';
+                }
+                result += '[';
+                bool first_filter = true;
+                for (const auto & filter : pkg_entry.filters) {
+                    if (!first_filter) {
+                        result += ',';
+                    }
+                    first_filter = false;
+                    result += package_filter_func_to_name(filter.filter_func);
+                    result += comparator_to_string(filter.comparator);
+                    result += to_quoted_string(filter.value);
+                }
+                result += ']';
+            }
+        }
+    }
+
+    return result;
+}
+
+
 std::string VendorChangePolicyCompactFormat::parse_quoted_string() {
     if (peek() != '"') {
         throw_error(Error(M_("Expected quoted string starting with '\"'")));
@@ -869,6 +1044,21 @@ std::string VendorChangePolicyCompactFormat::parse_quoted_string() {
     ++pos;
     return result;
 }
+
+
+std::string VendorChangePolicyCompactFormat::to_quoted_string(const std::string & value) {
+    std::string quoted_escaped;
+    quoted_escaped.reserve(value.size() + 2);
+    quoted_escaped += '"';
+    for (char c : value) {
+        if (c == '"' || c == '\\') {
+            quoted_escaped += '\\';
+        }
+        quoted_escaped += c;
+    }
+    quoted_escaped += '"';
+    return quoted_escaped;
+};
 
 
 VendorChangePolicyCompactFormat::VendorGroupType VendorChangePolicyCompactFormat::parse_direction() {
@@ -954,6 +1144,44 @@ sack::QueryCmp VendorChangePolicyCompactFormat::parse_comparator() {
 
     return result;
 }
+
+
+std::string VendorChangePolicyCompactFormat::comparator_to_string(sack::QueryCmp cmp) {
+    libdnf_assert(is_string_comparator(cmp) || is_relational_comparator(cmp), "Invalid comparator");
+
+    std::string result;
+
+    if ((cmp & sack::QueryCmp::NOT) == sack::QueryCmp::NOT) {
+        result += '!';
+    }
+    if ((cmp & sack::QueryCmp::ICASE) == sack::QueryCmp::ICASE) {
+        result += 'i';
+    }
+    auto base = cmp - sack::QueryCmp::NOT - sack::QueryCmp::ICASE;
+    if (base == sack::QueryCmp::EXACT) {
+        result += '=';
+    } else if (base == sack::QueryCmp::STARTSWITH) {
+        result += '^';
+    } else if (base == sack::QueryCmp::ENDSWITH) {
+        result += '$';
+    } else if (base == sack::QueryCmp::CONTAINS) {
+        result += '*';
+    } else if (base == sack::QueryCmp::GLOB) {
+        result += "=*";
+    } else if (base == sack::QueryCmp::REGEX) {
+        result += "=~";
+    } else if (base == sack::QueryCmp::GT) {
+        result += '>';
+    } else if (base == sack::QueryCmp::GTE) {
+        result += ">=";
+    } else if (base == sack::QueryCmp::LT) {
+        result += '<';
+    } else if (base == sack::QueryCmp::LTE) {
+        result += "<=";
+    }
+
+    return result;
+};
 
 
 void VendorChangePolicyCompactFormat::parse_vendor_entry(VendorChangeManager::VendorChangePolicy & policy) {
@@ -1154,6 +1382,44 @@ void VendorChangeManager::add_policy_from_compact(std::string_view policy_str, s
 void VendorChangeManager::clear_policies() {
     vendor_policies_def.clear();
     vendor_masks.clear();
+}
+
+
+const std::string & VendorChangeManager::get_policy_source(std::size_t index) const {
+    if (index >= vendor_policies_def.size()) {
+        throw base::VendorChangeManagerError(M_("get_policy_source(): Policy index {} is out of range"), index);
+    }
+    return vendor_policies_def[index].source;
+}
+
+
+std::string VendorChangeManager::get_policy_as_toml(std::size_t index) const {
+    if (index >= vendor_policies_def.size()) {
+        throw base::VendorChangeManagerError(M_("get_policy_as_toml(): Policy index {} is out of range"), index);
+    }
+    return VendorChangePolicyTomlFormat::to_string(vendor_policies_def[index]);
+}
+
+
+std::string VendorChangeManager::get_policy_as_compact(std::size_t index) const {
+    if (index >= vendor_policies_def.size()) {
+        throw base::VendorChangeManagerError(M_("get_policy_as_compact(): Policy index {} is out of range"), index);
+    }
+    return VendorChangePolicyCompactFormat::to_string(vendor_policies_def[index]);
+}
+
+
+std::string VendorChangeManager::convert_policy_toml_to_compact(const std::filesystem::path & path) {
+    VendorChangePolicyTomlFormat parser{path};
+    auto policy = parser.parse();
+    return VendorChangePolicyCompactFormat::to_string(policy);
+}
+
+
+std::string VendorChangeManager::convert_policy_compact_to_toml(std::string_view compact_str) {
+    VendorChangePolicyCompactFormat parser{compact_str};
+    auto policy = parser.parse();
+    return VendorChangePolicyTomlFormat::to_string(policy);
 }
 
 
