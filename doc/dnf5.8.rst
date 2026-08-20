@@ -249,6 +249,10 @@ Following options are applicable in the general context for any ``dnf5`` command
 ``--dump-variables``
     | Print variable values to stdout.
 
+``--dump-vendor-policies``
+    | Print loaded vendor change policies to stdout.
+    | Each policy displays its source (file path or "text:COMMAND LINE") and compact format representation.
+
 ``--enable-plugin=PLUGIN_NAME,...``
     | Enable specified libdnf5 library plugins for the purpose of the current ``DNF5`` command.
     | This is a list option which can be specified multiple times.
