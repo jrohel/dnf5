@@ -810,7 +810,9 @@ public:
 
 class VendorChangePolicyCompactFormat {
 public:
-    explicit VendorChangePolicyCompactFormat(std::string_view input) : input{input} {}
+    explicit VendorChangePolicyCompactFormat(std::string_view input, std::string source)
+        : input{input},
+          source{std::move(source)} {}
 
     VendorChangeManager::VendorChangePolicy parse();
 
@@ -867,7 +869,7 @@ private:
             throw err;
         } catch (...) {
             libdnf5::throw_with_nested(VendorChangePolicyCompactFormatError(
-                M_("Compact vendor change policy parse error at position {}"), pos));
+                M_("Compact vendor change policy parse error in \"{}\" at position {}"), source, pos));
         }
     }
 
@@ -892,6 +894,7 @@ private:
     void parse_package_entry(VendorChangeManager::VendorChangePolicy & policy);
 
     std::string_view input;
+    std::string source;
     size_t pos = 0;
 };
 
@@ -1370,7 +1373,7 @@ void VendorChangeManager::add_policy_from_toml(const std::filesystem::path & pat
 
 
 void VendorChangeManager::add_policy_from_compact(std::string_view policy_str, std::string_view source) {
-    VendorChangePolicyCompactFormat parser{policy_str};
+    VendorChangePolicyCompactFormat parser{policy_str, std::string(source)};
     auto policy = parser.parse();
 
     if (policy.outgoing_packages.empty() && policy.incoming_packages.empty() && policy.vendor_entries.empty()) {
@@ -1429,8 +1432,8 @@ std::string VendorChangeManager::convert_policy_toml_to_compact(const std::files
 }
 
 
-std::string VendorChangeManager::convert_policy_compact_to_toml(std::string_view compact_str) {
-    VendorChangePolicyCompactFormat parser{compact_str};
+std::string VendorChangeManager::convert_policy_compact_to_toml(std::string_view compact_str, std::string_view source) {
+    VendorChangePolicyCompactFormat parser{compact_str, std::string(source)};
     auto policy = parser.parse();
     return VendorChangePolicyTomlFormat::to_string(policy);
 }

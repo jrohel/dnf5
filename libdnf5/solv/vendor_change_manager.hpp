@@ -129,9 +129,11 @@ public:
 
     /// Convert a vendor change policy from compact format to TOML format.
     /// @param compact_str The policy in compact format
+    /// @param source Origin of the policy (for error messages)
     /// @return The policy formatted as a TOML string
     /// @throws base::VendorChangeManagerError if parsing fails
-    [[nodiscard]] static std::string convert_policy_compact_to_toml(std::string_view compact_str);
+    [[nodiscard]] static std::string convert_policy_compact_to_toml(
+        std::string_view compact_str, std::string_view source);
 
     /// Check if a vendor change is allowed between two solvables
     /// @param outgoing The currently installed solvable

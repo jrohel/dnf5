@@ -42,7 +42,8 @@ public:
 
     std::string get_loaded_policy_as_compact(std::size_t index) const { return vcm.get_policy_as_compact(index); }
 
-    void save_policy_from_compact(std::string_view policy_str, const std::filesystem::path & base_filename);
+    void save_policy_from_compact(
+        std::string_view policy_str, std::string_view source, const std::filesystem::path & base_filename);
 
     void remove_policy_file(const std::filesystem::path & base_filename);
 
@@ -74,10 +75,10 @@ void VendorChangeManager::Impl::load_policies() {
 
 
 void VendorChangeManager::Impl::save_policy_from_compact(
-    std::string_view policy_str, const std::filesystem::path & base_filename) {
+    std::string_view policy_str, std::string_view source, const std::filesystem::path & base_filename) {
     namespace fs = std::filesystem;
 
-    const auto toml_content = solv::VendorChangeManager::convert_policy_compact_to_toml(policy_str);
+    const auto toml_content = solv::VendorChangeManager::convert_policy_compact_to_toml(policy_str, source);
 
     fs::path file_path = get_vendor_conf_dir_path() / make_policy_filename(base_filename);
 
@@ -292,14 +293,14 @@ std::string VendorChangeManager::convert_policy_toml_to_compact(const std::files
 }
 
 
-std::string VendorChangeManager::convert_policy_compact_to_toml(std::string_view compact_str) {
-    return solv::VendorChangeManager::convert_policy_compact_to_toml(compact_str);
+std::string VendorChangeManager::convert_policy_compact_to_toml(std::string_view compact_str, std::string_view source) {
+    return solv::VendorChangeManager::convert_policy_compact_to_toml(compact_str, source);
 }
 
 
 void VendorChangeManager::save_policy_from_compact(
-    std::string_view policy_str, const std::filesystem::path & base_filename) {
-    p_impl->save_policy_from_compact(policy_str, base_filename);
+    std::string_view policy_str, std::string_view source, const std::filesystem::path & base_filename) {
+    p_impl->save_policy_from_compact(policy_str, source, base_filename);
 }
 
 

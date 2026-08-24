@@ -116,18 +116,22 @@ public:
 
     /// Convert a vendor change policy from compact format to TOML format.
     /// @param compact_str The policy in compact format.
+    /// @param source Origin of the policy (for error messages).
     /// @return The policy formatted as a TOML string.
     /// @throws VendorChangeManagerError if parsing fails.
-    [[nodiscard]] static std::string convert_policy_compact_to_toml(std::string_view compact_str);
+    [[nodiscard]] static std::string convert_policy_compact_to_toml(
+        std::string_view compact_str, std::string_view source);
 
     /// Save a vendor change policy to a TOML configuration file.
     /// Converts the compact format policy to TOML and saves it to the vendor
     /// configuration directory (``/etc/dnf/vendors.d/`` or installroot equivalent).
     /// @param policy_str The policy in compact format.
+    /// @param source Origin of the policy (for error messages).
     /// @param base_filename Base filename without extension or path (e.g., ``"my-policy"``).
     ///                      Must not contain path components. The ``.conf`` extension is added automatically.
     /// @throws VendorChangeManagerError if conversion or file write fails, or if base_filename contains path components.
-    void save_policy_from_compact(std::string_view policy_str, const std::filesystem::path & base_filename);
+    void save_policy_from_compact(
+        std::string_view policy_str, std::string_view source, const std::filesystem::path & base_filename);
 
     /// Remove a vendor change policy configuration file.
     /// Removes the file from the vendor configuration directory (``/etc/dnf/vendors.d/`` or installroot equivalent).
