@@ -10,6 +10,7 @@
 #include "libdnf5/base/vendor_change_manager_errors.hpp"
 #include "libdnf5/common/sack/match_string.hpp"
 #include "libdnf5/utils/bgettext/bgettext-mark-domain.h"
+#include "libdnf5/utils/fs/file.hpp"
 
 #include <toml.hpp>
 
@@ -254,7 +255,9 @@ public:
 
 class VendorChangePolicyTomlFormat {
 public:
-    explicit VendorChangePolicyTomlFormat(std::filesystem::path path) : path{std::move(path)} {}
+    explicit VendorChangePolicyTomlFormat(std::string_view toml_content, std::string source)
+        : toml_content{toml_content},
+          source{std::move(source)} {}
 
     VendorChangeManager::VendorChangePolicy parse() const;
 
@@ -264,7 +267,7 @@ private:
     using VendorGroupType = VendorChangeManager::VendorChangePolicy::VendorGroupType;
 
     // supported config file version
-    static constexpr std::array<std::string_view, 3> CONF_FILE_SUPPORTED_VERSIONS = {"1.0", "1.1", "1.2"};
+    static constexpr std::array<std::string_view, 3> CONF_SUPPORTED_VERSIONS = {"1.0", "1.1", "1.2"};
 
     static inline const std::map<std::string_view, sack::QueryCmp> COMPARATORS = {
         {"EXACT", sack::QueryCmp::EXACT},
@@ -315,7 +318,8 @@ private:
     VendorChangeManager::VendorChangePolicy::PackageDef::Filter read_package_def_filter(
         const toml::value & filter_table, const std::string & cfg_version) const;
 
-    std::filesystem::path path;
+    std::string toml_content;
+    std::string source;
 };
 
 
@@ -325,17 +329,17 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
     bool is_config_version_1_0;
 
     try {
-        // Parse the TOML file
-        auto config = toml::parse(path);
+        // Parse the TOML content
+        auto config = toml::parse_str(toml_content);
 
         // Check config file version
         const auto version = toml::find<std::optional<std::string>>(config, "version");
         if (!version) {
-            throw VendorChangePolicyTomlFormatError(M_("Missing \"version\" key in file \"{}\""), path.native());
+            throw VendorChangePolicyTomlFormatError(M_("Missing \"version\" key in \"{}\""), source);
         }
 
         bool is_supported_version{false};
-        for (const auto supported_version : CONF_FILE_SUPPORTED_VERSIONS) {
+        for (const auto supported_version : CONF_SUPPORTED_VERSIONS) {
             if (version == supported_version) {
                 is_supported_version = true;
                 break;
@@ -343,10 +347,10 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
         }
         if (!is_supported_version) {
             throw VendorChangePolicyTomlFormatError(
-                M_("Unsupported version \"{}\" in file \"{}\". Supported versions: {}"),
+                M_("Unsupported version \"{}\" in \"{}\". Supported versions: {}"),
                 *version,
-                path.native(),
-                libdnf5::utils::string::join(CONF_FILE_SUPPORTED_VERSIONS, ", "));
+                source,
+                libdnf5::utils::string::join(CONF_SUPPORTED_VERSIONS, ", "));
         }
 
         is_config_version_1_0 = version == "1.0";
@@ -354,9 +358,9 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
         if (is_config_version_1_0 && config.contains("equivalent_vendors") &&
             (config.contains("outgoing_vendors") || config.contains("incoming_vendors"))) {
             throw VendorChangePolicyTomlFormatError(
-                M_("Configuration file \"{}\" uses version \"1.0\" which does not support combining"
+                M_("Configuration \"{}\" uses version \"1.0\" which does not support combining"
                    " 'equivalent_vendors' with 'outgoing_vendors' and 'incoming_vendors'"),
-                path.native());
+                source);
         }
 
         for (const auto & [element, value] : config.as_table()) {
@@ -386,19 +390,16 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
             } else {
                 const auto location = value.location();
                 throw VendorChangePolicyTomlFormatError(
-                    M_("Unknown key '{}' in file \"{}\" on line {}"),
-                    element,
-                    path.native(),
-                    location_first_line_num(location));
+                    M_("Unknown key '{}' in \"{}\" on line {}"), element, source, location_first_line_num(location));
             }
 
             if (group_type == GroupType::OUTGOING_PACKAGES || group_type == GroupType::INCOMING_PACKAGES) {
                 if (is_config_version_1_0) {
                     const auto location = value.location();
                     throw VendorChangePolicyTomlFormatError(
-                        M_("Configuration file \"{}\" uses version \"1.0\""
+                        M_("Configuration \"{}\" uses version \"1.0\""
                            " which does not support key '{}' on line {}"),
-                        path.native(),
+                        source,
                         element,
                         location_first_line_num(location));
                 }
@@ -416,8 +417,8 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
                                     const auto location = filter_entry.location();
                                     throw VendorChangePolicyTomlFormatError(
                                         M_("Filter \"cmdline_repo\" is only allowed in the 'incoming_packages' section."
-                                           " Error in file \"{}\" in table starting on line {}"),
-                                        path.native(),
+                                           " Error in \"{}\" in table starting on line {}"),
+                                        source,
                                         location_first_line_num(location));
                                 }
                                 package_def.filters.emplace_back(std::move(filter));
@@ -427,9 +428,9 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
                         } else {
                             const auto location = value.location();
                             throw VendorChangePolicyTomlFormatError(
-                                M_("Unknown key '{}' in file \"{}\" on line {}"),
+                                M_("Unknown key '{}' in \"{}\" on line {}"),
                                 key,
-                                path.native(),
+                                source,
                                 location_first_line_num(location));
                         }
                     }
@@ -437,8 +438,8 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
                     if (package_def.filters.empty()) {
                         const auto location = entry.location();
                         throw VendorChangePolicyTomlFormatError(
-                            M_("Missing package filter definition in file \"{}\" in table starting on line {}"),
-                            path.native(),
+                            M_("Missing package filter definition in \"{}\" in table starting on line {}"),
+                            source,
                             location_first_line_num(location));
                     }
 
@@ -468,9 +469,9 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
                         if (!is_string_comparator(comparator)) {
                             const auto location = value.location();
                             throw VendorChangePolicyTomlFormatError(
-                                M_("Unsupported comparator \"{}\" for vendor definition in file \"{}\" on line {}"),
+                                M_("Unsupported comparator \"{}\" for vendor definition in \"{}\" on line {}"),
                                 comparator_to_string(comparator),
-                                path.native(),
+                                source,
                                 location_first_line_num(location));
                         }
                         vendor_def.comparator = comparator;
@@ -479,9 +480,9 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
                     } else {
                         const auto location = value.location();
                         throw VendorChangePolicyTomlFormatError(
-                            M_("Unknown key '{}' in file \"{}\" on line {}"),
+                            M_("Unknown key '{}' in \"{}\" on line {}"),
                             key,
-                            path.native(),
+                            source,
                             location_first_line_num(location));
                     }
                 }
@@ -489,8 +490,8 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
                 if (!is_vendor_set) {
                     const auto location = entry.location();
                     throw VendorChangePolicyTomlFormatError(
-                        M_("Missing 'vendor' key in file \"{}\" in table starting on line {}"),
-                        path.native(),
+                        M_("Missing 'vendor' key in \"{}\" in table starting on line {}"),
+                        source,
                         location_first_line_num(location));
                 }
 
@@ -502,9 +503,9 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
                     } catch (const std::exception & ex) {
                         const auto location = entry.location();
                         throw VendorChangePolicyTomlFormatError(
-                            M_("Invalid regex vendor pattern \"{}\" in file \"{}\" in table starting on line {}: {}"),
+                            M_("Invalid regex vendor pattern \"{}\" in \"{}\" in table starting on line {}: {}"),
                             vendor_def.vendor,
-                            path.native(),
+                            source,
                             location_first_line_num(location),
                             std::string(ex.what()));
                     }
@@ -530,13 +531,13 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
     } catch (const toml::type_error & ex) {
         auto loc = ex.location();
         throw VendorChangePolicyTomlFormatError(
-            M_("Bad value type in file \"{}\" on line {}: {}"),
-            path.native(),
+            M_("Bad value type in \"{}\" on line {}: {}"),
+            source,
             location_first_line_num(loc),
             std::string(ex.what()));
     } catch (const toml::exception & ex) {
         throw VendorChangePolicyTomlFormatError(
-            M_("An error occurred when parsing file \"{}\": {}"), path.native(), std::string(ex.what()));
+            M_("An error occurred when parsing \"{}\": {}"), source, std::string(ex.what()));
     }
 
     if (is_config_version_1_0 && !policy.vendor_entries.empty()) {
@@ -550,15 +551,15 @@ VendorChangeManager::VendorChangePolicy VendorChangePolicyTomlFormat::parse() co
         }
         if (!has_outgoing) {
             throw VendorChangePolicyTomlFormatError(
-                M_("Configuration file \"{}\" uses version \"1.0\" which does not support"
+                M_("Configuration \"{}\" uses version \"1.0\" which does not support"
                    " 'incoming_vendors' without 'outgoing_vendors'"),
-                path.native());
+                source);
         }
         if (!has_incoming) {
             throw VendorChangePolicyTomlFormatError(
-                M_("Configuration file \"{}\" uses version \"1.0\" which does not support"
+                M_("Configuration \"{}\" uses version \"1.0\" which does not support"
                    " 'outgoing_vendors' without 'incoming_vendors'"),
-                path.native());
+                source);
         }
     }
 
@@ -642,12 +643,12 @@ sack::QueryCmp VendorChangePolicyTomlFormat::string_to_comparator(
     const auto it_12 = COMPARATORS_1_2.find(str_comparator);
     if (it_12 == COMPARATORS_1_2.end()) {
         throw VendorChangePolicyTomlFormatError(
-            M_("Unknown 'comparator' \"{}\" in file \"{}\" on line {}"), str_comparator, path.native(), line_num);
+            M_("Unknown 'comparator' \"{}\" in \"{}\" on line {}"), str_comparator, source, line_num);
     }
     if (cfg_version != "1.2") {
         throw VendorChangePolicyTomlFormatError(
-            M_("Configuration file \"{}\" uses version \"{}\" which does not support 'comparator' \"{}\""),
-            path.native(),
+            M_("Configuration \"{}\" uses version \"{}\" which does not support 'comparator' \"{}\""),
+            source,
             cfg_version,
             str_comparator);
     }
@@ -685,9 +686,9 @@ VendorChangeManager::VendorChangePolicy::PackageDef::Filter VendorChangePolicyTo
             if (!filter.filter_func) {
                 const auto location = value.location();
                 throw VendorChangePolicyTomlFormatError(
-                    M_("Unknown 'filter' \"{}\" in file \"{}\" on line {}"),
+                    M_("Unknown 'filter' \"{}\" in \"{}\" on line {}"),
                     filter_str,
-                    path.native(),
+                    source,
                     location_first_line_num(location));
             }
             filter_found = true;
@@ -700,35 +701,28 @@ VendorChangeManager::VendorChangePolicy::PackageDef::Filter VendorChangePolicyTo
         } else {
             const auto location = value.location();
             throw VendorChangePolicyTomlFormatError(
-                M_("Unknown key '{}' in file \"{}\" on line {}"),
-                key,
-                path.native(),
-                location_first_line_num(location));
+                M_("Unknown key '{}' in \"{}\" on line {}"), key, source, location_first_line_num(location));
         }
     }
     if (!filter_found) {
         const auto location = filter_table.location();
         throw VendorChangePolicyTomlFormatError(
-            M_("Missing 'filter' key in file \"{}\" for table entry on line {}"),
-            path.native(),
-            location_first_line_num(location));
+            M_("Missing 'filter' key in \"{}\" for table entry on line {}"), source, location_first_line_num(location));
     }
     if (!value_found) {
         const auto location = filter_table.location();
         throw VendorChangePolicyTomlFormatError(
-            M_("Missing 'value' key in file \"{}\" for table entry on line {}"),
-            path.native(),
-            location_first_line_num(location));
+            M_("Missing 'value' key in \"{}\" for table entry on line {}"), source, location_first_line_num(location));
     }
 
     if (filter.filter_func == filter_package_cmdline_repo) {
         if (filter.comparator != sack::QueryCmp::EXACT) {
             const auto location = filter_table.location();
             throw VendorChangePolicyTomlFormatError(
-                M_("Filter \"cmdline_repo\" in file \"{}\" in table starting on line {} "
+                M_("Filter \"cmdline_repo\" in \"{}\" in table starting on line {} "
                    "does not support comparator \"{}\"."
                    " Only the default \"EXACT\" comparator is allowed for this filter"),
-                path.native(),
+                source,
                 location_first_line_num(location),
                 comparator_to_string(filter.comparator));
         }
@@ -742,20 +736,20 @@ VendorChangeManager::VendorChangePolicy::PackageDef::Filter VendorChangePolicyTo
         } else {
             const auto location = filter_table.location();
             throw VendorChangePolicyTomlFormatError(
-                M_("Invalid 'value' \"{}\" in file \"{}\" in table starting on line {}."
+                M_("Invalid 'value' \"{}\" in \"{}\" in table starting on line {}."
                    " Only \"true\", \"1\", \"false\", \"0\" are supported"),
                 filter.value,
-                path.native(),
+                source,
                 location_first_line_num(location));
         }
     } else if (is_relational_package_filter_func(filter.filter_func)) {
         if (!is_relational_comparator(filter.comparator)) {
             const auto location = filter_table.location();
             throw VendorChangePolicyTomlFormatError(
-                M_("Filter \"{}\" in file \"{}\" in table starting on line {} "
+                M_("Filter \"{}\" in \"{}\" in table starting on line {} "
                    "does not support comparator \"{}\""),
                 filter_str,
-                path.native(),
+                source,
                 location_first_line_num(location),
                 comparator_to_string(filter.comparator));
         }
@@ -763,10 +757,10 @@ VendorChangeManager::VendorChangePolicy::PackageDef::Filter VendorChangePolicyTo
         if (!is_string_comparator(filter.comparator)) {
             const auto location = filter_table.location();
             throw VendorChangePolicyTomlFormatError(
-                M_("Filter \"{}\" in file \"{}\" in table starting on line {} "
+                M_("Filter \"{}\" in \"{}\" in table starting on line {} "
                    "does not support comparator \"{}\""),
                 filter_str,
-                path.native(),
+                source,
                 location_first_line_num(location),
                 comparator_to_string(filter.comparator));
         }
@@ -779,9 +773,9 @@ VendorChangeManager::VendorChangePolicy::PackageDef::Filter VendorChangePolicyTo
         } catch (const std::exception & ex) {
             const auto location = filter_table.location();
             throw VendorChangePolicyTomlFormatError(
-                M_("Invalid epoch value \"{}\" in file \"{}\" in table starting on line {}"),
+                M_("Invalid epoch value \"{}\" in \"{}\" in table starting on line {}"),
                 filter.value,
-                path.native(),
+                source,
                 location_first_line_num(location));
         }
     }
@@ -794,9 +788,9 @@ VendorChangeManager::VendorChangePolicy::PackageDef::Filter VendorChangePolicyTo
         } catch (const std::exception & ex) {
             const auto location = filter_table.location();
             throw VendorChangePolicyTomlFormatError(
-                M_("Invalid regex \"{}\" in file \"{}\" in table starting on line {}: {}"),
+                M_("Invalid regex \"{}\" in \"{}\" in table starting on line {}: {}"),
                 filter.value,
-                path.native(),
+                source,
                 location_first_line_num(location),
                 std::string(ex.what()));
         }
@@ -1349,8 +1343,8 @@ void VendorChangePolicyCompactFormat::parse_package_entry(VendorChangeManager::V
 VendorChangeManager::VendorChangeManager(const Pool & pool) : pool{pool} {}
 
 
-void VendorChangeManager::add_policy_from_toml(const std::filesystem::path & path) {
-    VendorChangePolicyTomlFormat parser{path};
+void VendorChangeManager::add_policy_from_toml(std::string_view toml_content, std::string_view source) {
+    VendorChangePolicyTomlFormat parser{toml_content, std::string(source)};
     auto policy = parser.parse();
 
     if (policy.outgoing_packages.empty() && policy.incoming_packages.empty() && policy.vendor_entries.empty()) {
@@ -1358,9 +1352,20 @@ void VendorChangeManager::add_policy_from_toml(const std::filesystem::path & pat
         return;
     }
 
-    policy.source = (path.is_absolute() ? "file:///" : "file:") + path.string();
+    policy.source = source;
 
     add_policy(std::move(policy));
+}
+
+
+void VendorChangeManager::add_policy_from_toml(const std::filesystem::path & path) {
+    // Read the TOML file content
+    std::string toml_content = libdnf5::utils::fs::File(path, "rb").read();
+
+    // Prepare source string for error messages
+    std::string source = path_to_source(path);
+
+    add_policy_from_toml(toml_content, source);
 }
 
 
@@ -1409,10 +1414,18 @@ std::string VendorChangeManager::get_policy_as_compact(std::size_t index) const 
 }
 
 
-std::string VendorChangeManager::convert_policy_toml_to_compact(const std::filesystem::path & path) {
-    VendorChangePolicyTomlFormat parser{path};
+std::string VendorChangeManager::convert_policy_toml_to_compact(
+    std::string_view toml_content, std::string_view source) {
+    VendorChangePolicyTomlFormat parser{toml_content, std::string(source)};
     auto policy = parser.parse();
     return VendorChangePolicyCompactFormat::to_string(policy);
+}
+
+
+std::string VendorChangeManager::convert_policy_toml_to_compact(const std::filesystem::path & path) {
+    std::string toml_content = libdnf5::utils::fs::File(path, "rb").read();
+    std::string source = path_to_source(path);
+    return convert_policy_toml_to_compact(toml_content, source);
 }
 
 
@@ -1571,6 +1584,11 @@ bool VendorChangeManager::matches_package_defs(
     }
 
     return false;  // Disallow change if no rules matched (Allowlist principle)
+}
+
+
+std::string VendorChangeManager::path_to_source(const std::filesystem::path & path) {
+    return (path.is_absolute() ? "file:///" : "file:") + path.string();
 }
 
 }  // namespace libdnf5::solv
